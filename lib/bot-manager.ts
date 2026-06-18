@@ -140,23 +140,42 @@ function commandUsesArg(cmd: CustomCommand): boolean {
 }
 
 function buildCommandData(): ApplicationCommandDataResolvable[] {
-  return manager.commands.map((c) => {
-    const data: ApplicationCommandDataResolvable = {
-      name: c.name,
-      description: c.description || 'Custom command',
-    }
-    if (commandUsesArg(c)) {
-      ;(data as { options?: unknown }).options = [
+  const builtIns: ApplicationCommandDataResolvable[] = [
+    {
+      name: 'say',
+      description: 'Make the bot say something (only visible to you)',
+      options: [
         {
-          name: 'text',
-          description: 'Text passed to the command',
+          name: 'message',
+          description: 'What the bot should say',
           type: ApplicationCommandOptionType.String,
-          required: false,
+          required: true,
         },
-      ]
-    }
-    return data
-  })
+      ],
+    },
+  ]
+
+  const custom = manager.commands
+    .filter((c) => c.name !== 'say')
+    .map((c) => {
+      const data: ApplicationCommandDataResolvable = {
+        name: c.name,
+        description: c.description || 'Custom command',
+      }
+      if (commandUsesArg(c)) {
+        ;(data as { options?: unknown }).options = [
+          {
+            name: 'text',
+            description: 'Text passed to the command',
+            type: ApplicationCommandOptionType.String,
+            required: false,
+          },
+        ]
+      }
+      return data
+    })
+
+  return [...builtIns, ...custom]
 }
 
 // Load commands from the database and (if connected) push them to Discord as
@@ -277,6 +296,27 @@ function buildClient(withMessageContent: boolean): Client {
 
   client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return
+
+    // Built-in /say — owner-only, replies with an embed only the caller can see.
+    if (interaction.commandName === 'say') {
+      if (manager.state.ownerId && interaction.user.id !== manager.state.ownerId) {
+        await interaction
+          .reply({ content: 'Sorry, only the bot owner can use this command.', ephemeral: true })
+          .catch((e) => log(`Failed to reply to /say: ${e instanceof Error ? e.message : 'unknown'}`))
+        return
+      }
+      const message = interaction.options.getString('message', true)
+      manager.state.commandsRun += 1
+      log(`/say used by ${interaction.user.username}`)
+      try {
+        const embed = new EmbedBuilder().setDescription(message)
+        await interaction.reply({ embeds: [embed], ephemeral: true })
+      } catch (e) {
+        log(`Failed to reply to /say: ${e instanceof Error ? e.message : 'unknown'}`)
+      }
+      return
+    }
+
     const cmd = manager.commands.find((c) => c.name === interaction.commandName)
     if (!cmd) return
     manager.state.commandsRun += 1
